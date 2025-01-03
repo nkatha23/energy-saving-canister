@@ -6,10 +6,11 @@ use ic_stable_structures::memory_manager::{MemoryId, MemoryManager, VirtualMemor
 use ic_stable_structures::{BoundedStorable, Cell, DefaultMemoryImpl, StableBTreeMap, Storable};
 use std::{borrow::Cow, cell::RefCell};
 
+// Define the type aliases for memory and ID counter management
 type Memory = VirtualMemory<DefaultMemoryImpl>;
 type IdCell = Cell<u64, Memory>;
 
-// Define a struct for storing energy usage details
+// Struct to store energy usage details
 #[derive(candid::CandidType, Clone, Serialize, Deserialize, Default)]
 struct EnergyUsage {
     id: u64,                     // Unique identifier for each record
@@ -19,7 +20,7 @@ struct EnergyUsage {
     recommendation: Option<String>, // Optional energy-saving recommendation
 }
 
-// Implement the Storable trait for EnergyUsage
+// Implement the Storable trait to allow serialization/deserialization
 impl Storable for EnergyUsage {
     fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
         Cow::Owned(Encode!(self).unwrap())
@@ -30,13 +31,13 @@ impl Storable for EnergyUsage {
     }
 }
 
-// Implement the BoundedStorable trait for EnergyUsage
+// Implement the BoundedStorable trait to set size limits for storage
 impl BoundedStorable for EnergyUsage {
-    const MAX_SIZE: u32 = 1024;
+    const MAX_SIZE: u32 = 1024; // Maximum storage size in bytes
     const IS_FIXED_SIZE: bool = false;
 }
 
-// Thread-local storage for memory management and data storage
+// Thread-local storage setup for memory management
 thread_local! {
     static MEMORY_MANAGER: RefCell<MemoryManager<DefaultMemoryImpl>> = RefCell::new(
         MemoryManager::init(DefaultMemoryImpl::default())
@@ -53,7 +54,7 @@ thread_local! {
         ));
 }
 
-// Struct for energy usage payload from users
+// Struct for input payload to add new energy usage
 #[derive(candid::CandidType, Serialize, Deserialize, Default)]
 struct EnergyUsagePayload {
     usage_kwh: f64,              // Energy usage in kilowatt-hours
@@ -63,6 +64,14 @@ struct EnergyUsagePayload {
 // Add a new energy usage record
 #[ic_cdk::update]
 fn add_energy_usage(payload: EnergyUsagePayload) -> Result<EnergyUsage, Error> {
+    // Validate input data
+    if payload.usage_kwh <= 0.0 || payload.device_type.is_empty() {
+        return Err(Error::InvalidInput {
+            msg: "Usage must be greater than 0 and device type cannot be empty.".to_string(),
+        });
+    }
+
+    // Increment the ID counter to create a unique ID
     let id = ID_COUNTER
         .with(|counter| {
             let current_value = *counter.borrow().get();
@@ -70,19 +79,21 @@ fn add_energy_usage(payload: EnergyUsagePayload) -> Result<EnergyUsage, Error> {
         })
         .expect("Cannot increment ID counter");
 
+    // Create a new EnergyUsage record
     let energy_usage = EnergyUsage {
         id,
         usage_kwh: payload.usage_kwh,
         timestamp: time(),
-        device_type: payload.device_type,
+        device_type: payload.device_type.clone(),
         recommendation: Some(generate_recommendation(payload.usage_kwh)),
     };
 
+    // Insert the new record into storage
     do_insert(&energy_usage)?;
     Ok(energy_usage)
 }
 
-// Insert the energy usage record into storage
+// Helper function to insert an energy usage record into storage
 fn do_insert(energy_usage: &EnergyUsage) -> Result<(), Error> {
     STORAGE.with(|service| {
         service.borrow_mut().insert(energy_usage.id, energy_usage.clone())
@@ -107,12 +118,12 @@ fn get_energy_usage(id: u64) -> Result<EnergyUsage, Error> {
     match _get_energy_usage(&id) {
         Some(usage) => Ok(usage),
         None => Err(Error::NotFound {
-            msg: format!("Energy usage record with ID {} not found", id),
+            msg: format!("Energy usage record with ID {} not found.", id),
         }),
     }
 }
 
-// Helper method to fetch the energy usage record from storage
+// Internal helper function to fetch a record from storage
 fn _get_energy_usage(id: &u64) -> Option<EnergyUsage> {
     STORAGE.with(|s| s.borrow().get(id))
 }
@@ -128,7 +139,7 @@ fn delete_energy_usage(id: u64) -> Result<EnergyUsage, Error> {
     }
 }
 
-// Define error types for the canister
+// Define custom error types for the system
 #[derive(candid::CandidType, Deserialize, Serialize, Debug)]
 enum Error {
     NotFound { msg: String },    // Record not found
@@ -139,7 +150,7 @@ enum Error {
 // Export the Candid interface for the canister
 ic_cdk::export_candid!();
 
-// Integration tests (to be run locally or with CI tools)
+// Integration tests to verify functionality
 #[cfg(test)]
 mod tests {
     use super::*;
